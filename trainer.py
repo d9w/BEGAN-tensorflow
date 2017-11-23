@@ -50,15 +50,18 @@ def slerp(val, low, high):
     return np.sin((1.0-val)*omega) / so * low + np.sin(val*omega) / so * high
 
 class Trainer(object):
-    def __init__(self, config, data_loader):
+    def __init__(self, config, input_loader, output_loader, kdt_loader):
         self.config = config
-        self.data_loader = data_loader
+        self.input_loader = input_loader
+        self.output_loader = output_loader
+        self.kdt_loader = kdt_loader
         self.dataset = config.dataset
 
         self.beta1 = config.beta1
         self.beta2 = config.beta2
         self.optimizer = config.optimizer
         self.batch_size = config.batch_size
+        self.dt_net_neurons = config.dt_net_neurons
 
         self.step = tf.Variable(0, name='step', trainable=False)
 
@@ -82,7 +85,7 @@ class Trainer(object):
         self.data_format = config.data_format
 
         _, height, width, self.channel = \
-                get_conv_shape(self.data_loader, self.data_format)
+                get_conv_shape(self.input_loader, self.data_format)
         self.repeat_num = int(np.log2(height)) - 2
 
         self.start_step = 0
@@ -120,9 +123,9 @@ class Trainer(object):
             self.build_test_model()
 
     def train(self):
-        z_fixed = np.random.uniform(-1, 1, size=(self.batch_size, self.z_num))
+        z_fixed = self.get_image_input()
 
-        x_fixed = self.get_image_from_loader()
+        x_fixed = self.get_image_output()
         save_image(x_fixed, '{}/x_fixed.png'.format(self.model_dir))
 
         prev_measure = 1
@@ -167,16 +170,15 @@ class Trainer(object):
                 #prev_measure = cur_measure
 
     def build_model(self):
-        self.x = self.data_loader
+        self.x = self.output_loader
         x = norm_img(self.x)
 
-        self.z = tf.random_uniform(
-                (tf.shape(x)[0], self.z_num), minval=-1.0, maxval=1.0)
+        self.z = self.input_loader
         self.k_t = tf.Variable(0., trainable=False, name='k_t')
 
         G, self.G_var = GeneratorCNN(
-                self.z, self.conv_hidden_num, self.channel,
-                self.repeat_num, self.data_format, reuse=False)
+                self.z, self.kdt_loader, self.conv_hidden_num, self.channel,
+                self.repeat_num, self.dt_net_neurons, self.data_format, reuse=False)
 
         d_out, self.D_z, self.D_var = DiscriminatorCNN(
                 tf.concat([G, x], 0), self.channel, self.z_num, self.repeat_num,
@@ -322,21 +324,16 @@ class Trainer(object):
 
         all_G_z = None
         for step in range(3):
-            real1_batch = self.get_image_from_loader()
-            real2_batch = self.get_image_from_loader()
+            real1_batch = self.get_output_image()
 
             save_image(real1_batch, os.path.join(root_path, 'test{}_real1.png'.format(step)))
-            save_image(real2_batch, os.path.join(root_path, 'test{}_real2.png'.format(step)))
 
             self.autoencode(
                     real1_batch, self.model_dir, idx=os.path.join(root_path, "test{}_real1".format(step)))
-            self.autoencode(
-                    real2_batch, self.model_dir, idx=os.path.join(root_path, "test{}_real2".format(step)))
 
             self.interpolate_G(real1_batch, step, root_path)
-            #self.interpolate_D(real1_batch, real2_batch, step, root_path)
 
-            z_fixed = np.random.uniform(-1, 1, size=(self.batch_size, self.z_num))
+            z_fixed = self.get_input_image()
             G_z = self.generate(z_fixed, path=os.path.join(root_path, "test{}_G_z.png".format(step)))
 
             if all_G_z is None:
@@ -346,6 +343,18 @@ class Trainer(object):
             save_image(all_G_z, '{}/G_z{}.png'.format(root_path, step))
 
         save_image(all_G_z, '{}/all_G_z.png'.format(root_path), nrow=16)
+
+    def get_output_image():
+        x = self.output_loader.eval(session=self.sess)
+        if self.data_format == 'NCHW':
+            x = x.transpose([0, 2, 3, 1])
+        return x
+
+    def get_input_image():
+        x = self.input_loader.eval(session=self.sess)
+        if self.data_format == 'NCHW':
+            x = x.transpose([0, 2, 3, 1])
+        return x
 
     def get_image_from_loader(self):
         x = self.data_loader.eval(session=self.sess)

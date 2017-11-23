@@ -25,10 +25,9 @@ def main(config):
         batch_size = config.sample_per_image
         do_shuffle = False
 
-    data_loader = get_loader(
-            data_path, config.batch_size, config.input_scale_size,
-            config.data_format, config.split)
-    trainer = Trainer(config, data_loader)
+    train_image_batch, train_label_batch, train_kdt_batch = get_files_and_time()
+
+    trainer = Trainer(config, train_image_batch, train_label_batch, train_kdt_batch)
 
     if config.is_train:
         save_config(config)
